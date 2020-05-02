@@ -261,8 +261,7 @@ namespace NauticaSynchronizer
 			try
 			{
 				Downloader = (HttpWebRequest)WebRequest.Create(FileLink);
-				Downloader.Timeout = 10000;
-				Downloader.ContinueTimeout = 30000;
+				Downloader.Timeout = 30000;
 				Downloader.ReadWriteTimeout = 60000;
 				long FileSize = Downloader.GetResponse().ContentLength;
 				long SaveSize = 0;
@@ -309,17 +308,17 @@ namespace NauticaSynchronizer
 				while (readSize > 0);
 
 				File.WriteAllBytes(FilePath, buffers.ToArray());
-				buffers.Clear();
 				ns.Close();
 				result = true;
 			}
 			catch (Exception e)
 			{
-				if(Downloader!=null) Downloader.Abort();
-				buffers.Clear();
 				Console.WriteLine(e.Message);
 				result = false;
 			}
+			// Free up resources
+			if (Downloader != null) Downloader.Abort();
+			buffers.Clear();
 			return result;
 		}
 

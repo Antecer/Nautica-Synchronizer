@@ -232,17 +232,31 @@ namespace NauticaSynchronizer
 		static string GetHtml(string FileLink)
 		{
 			ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;          // SecurityProtocolType.Tls1.2;
+			ServicePointManager.DefaultConnectionLimit = 20;
+			WebClient WClient = new WebClient();
+			string result;
 			try
 			{
-				WebClient WClient = new WebClient();
-				string data = WClient.DownloadString(FileLink);
-				return data;
+				result = WClient.DownloadString(FileLink);
 			}
 			catch (WebException e)
 			{
-				Console.WriteLine(e.Message);
-				return null;
+				Console.WriteLine($"{e.Message}, Try Again...");
+				result = null;
 			}
+			if (result == null)
+			{
+				try
+				{
+					result = WClient.DownloadString(FileLink);
+				}
+				catch (WebException e)
+				{
+					Console.WriteLine(e.Message);
+					result = null;
+				}
+			}
+			return result;
 		}
 
 		/// <summary>
@@ -255,19 +269,25 @@ namespace NauticaSynchronizer
 		{
 			bool result;
 			ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;          // SecurityProtocolType.Tls1.2;
+			ServicePointManager.DefaultConnectionLimit = 20;
 			Title = $"NauticaSynchronizer  -  Count:{DownloadCount} , Speed:0B/s , Progress:0.00% , Loaded:0Byte";
-			HttpWebRequest Downloader = null;
+
 			List<byte> buffers = new List<byte>();
+			HttpWebRequest Downloader = (HttpWebRequest)WebRequest.Create(FileLink);
+			Downloader.KeepAlive = false;
+			Downloader.Method = "GET";
+			Downloader.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36";
+			Downloader.ServicePoint.Expect100Continue = false;
+			Downloader.Timeout = 30000;
+			Downloader.ReadWriteTimeout = 60000;
 			try
 			{
-				Downloader = (HttpWebRequest)WebRequest.Create(FileLink);
-				Downloader.Timeout = 30000;
-				Downloader.ReadWriteTimeout = 60000;
-				long FileSize = Downloader.GetResponse().ContentLength;
+				using HttpWebResponse response = (HttpWebResponse)Downloader.GetResponse();
+				long FileSize = response.ContentLength;
 				long SaveSize = 0;
 				long TickSize = 0;
 
-				using Stream ns = Downloader.GetResponse().GetResponseStream();
+				using Stream ns = response.GetResponseStream();
 				int readSize = 0;
 				int buffSize = 1024;
 				byte[] buffer = new byte[buffSize];
@@ -309,6 +329,7 @@ namespace NauticaSynchronizer
 
 				File.WriteAllBytes(FilePath, buffers.ToArray());
 				ns.Close();
+				response.Close();
 				result = true;
 			}
 			catch (Exception e)

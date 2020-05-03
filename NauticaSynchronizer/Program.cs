@@ -308,7 +308,9 @@ namespace NauticaSynchronizer
 					TickSize += readSize;
 					if (CancelToken.IsCancellationRequested)
 					{
-						CancelToken.ThrowIfCancellationRequested();
+						Downloader.Abort();
+						buffers.Clear();
+						return false;
 					}
 
 					if (TickSize == SaveSize || DateTime.Compare(ReferTime, DateTime.Now) <= 0)

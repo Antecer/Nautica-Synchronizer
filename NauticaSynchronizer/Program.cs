@@ -20,7 +20,7 @@ namespace NauticaSynchronizer
 	class Program
 	{
 		private static readonly SemaphoreSlim _mutex = new SemaphoreSlim(10);
-		private static string Title { set { Console.Title = value; } }
+		private static string Title { get { return Console.Title; } set { Console.Title = value; } }
 		static List<Dictionary<string, object>> MetaTable = new List<Dictionary<string, object>>();
 		static string DownloadCount = "1/1";
 		static string DownloadSpeed = "0B/s";
@@ -149,12 +149,20 @@ namespace NauticaSynchronizer
 					LogOut($"   Download: {LoadLink}");
 					LogOut($"    CDN_URL: {SongData["cdn_download_url"]}");
 					LogOut($"Download From: {LoadLink}");
-					bool resultBool = await FileDownload(LoadLink, $"{SavePath}{SongID}.zip");
+					CancellationTokenSource TokenSource = new CancellationTokenSource();
+					Task<bool> completedTask = await Task.WhenAny(TimeoutDetector(30, TokenSource.Token), FileDownload(LoadLink, $"{SavePath}{SongID}.zip", TokenSource.Token));
+					TokenSource.Cancel();
+					TokenSource.Dispose();
+					bool resultBool = completedTask.Result;
 					if (!resultBool)
 					{
 						LoadLink = SongData["cdn_download_url"].ToString();
 						LogOut($"Download From: {LoadLink}");
-						resultBool = await FileDownload(LoadLink, $"{SavePath}{SongID}.zip");
+						CancellationTokenSource TokenSource1 = new CancellationTokenSource();
+						Task<bool> completedTask1 = await Task.WhenAny(TimeoutDetector(30, TokenSource1.Token), FileDownload(LoadLink, $"{SavePath}{SongID}.zip", TokenSource1.Token));
+						TokenSource1.Cancel();
+						TokenSource1.Dispose();
+						resultBool = completedTask1.Result;
 					}
 					if (resultBool)
 					{
@@ -196,7 +204,7 @@ namespace NauticaSynchronizer
 							LogOut("Success!");
 							Console.ForegroundColor = ConsoleColor.Gray;
 						}
-						catch(Exception e)
+						catch (Exception e)
 						{
 							Console.ForegroundColor = ConsoleColor.Red;
 							LogOut($"Failed: {e.Message}");
@@ -265,7 +273,7 @@ namespace NauticaSynchronizer
 		/// <param name="FileLink">目标链接</param>
 		/// <param name="FilePath">保存路径</param>
 		/// <returns>操作结果</returns>
-		static async Task<bool> FileDownload(string FileLink, string FilePath)
+		static async Task<bool> FileDownload(string FileLink, string FilePath, CancellationToken CancelToken)
 		{
 			bool result;
 			ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;          // SecurityProtocolType.Tls1.2;
@@ -298,6 +306,10 @@ namespace NauticaSynchronizer
 					buffers.AddRange(buffer);
 					SaveSize += readSize;
 					TickSize += readSize;
+					if (CancelToken.IsCancellationRequested)
+					{
+						CancelToken.ThrowIfCancellationRequested();
+					}
 
 					if (TickSize == SaveSize || DateTime.Compare(ReferTime, DateTime.Now) <= 0)
 					{
@@ -319,9 +331,9 @@ namespace NauticaSynchronizer
 							ReferTime = ReferTime.AddSeconds(1);
 						}
 					}
-					DownloadProgress = FileSize > 0 ? $"{(double)SaveSize*100 / FileSize:0.00}%" : $"{(double)SaveSize / 1024:0.00}Kb";
-					if (FileSize > 1024 * 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize/1024/1024:0.00}Mb";
-					else if (FileSize > 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize / 1024:0.00}Kb";
+					DownloadProgress = FileSize > 0 ? $"{(double)SaveSize * 100 / FileSize:0.00}%" : $"{(double)SaveSize / 1024:0.00}KB";
+					if (FileSize > 1024 * 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize / 1024 / 1024:0.00}MB";
+					else if (FileSize > 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize / 1024:0.00}KB";
 
 					Title = $"NauticaSynchronizer  -  Count:{DownloadCount} , Speed:{DownloadSpeed} , Progress:{DownloadProgress}";
 				}
@@ -342,7 +354,38 @@ namespace NauticaSynchronizer
 			buffers.Clear();
 			return result;
 		}
+		/// <summary>
+		/// Task超时判断任务
+		/// </summary>
+		/// <param name="time">设置时间阈值(ms)</param>
+		/// <returns></returns>
+		static async Task<bool> TimeoutDetector(int time, CancellationToken CancelToken)
+		{
+			int tick = 0;
+			string refer = Title;
+			while (tick < time)
+			{
+				await Task.Delay(1000);
+				if (refer == Title)
+				{
+					++tick;
+				}
+				else
+				{
+					tick = 0;
+					refer = Title;
+				}
+				if (CancelToken.IsCancellationRequested)
+				{
+					return true;
+				}
+			}
 
+			Console.ForegroundColor = ConsoleColor.Red;
+			Console.WriteLine("Task Execution Timeout!");
+			Console.ForegroundColor = ConsoleColor.Gray;
+			return false;
+		}
 		/// <summary>
 		/// 将Json数据反序列化为Dictionary字典
 		/// </summary>

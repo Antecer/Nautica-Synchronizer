@@ -22,9 +22,6 @@ namespace NauticaSynchronizer
 		private static readonly SemaphoreSlim _mutex = new SemaphoreSlim(10);
 		private static string Title { get { return Console.Title; } set { Console.Title = value; } }
 		static List<Dictionary<string, object>> MetaTable = new List<Dictionary<string, object>>();
-		static string DownloadCount = "1/1";
-		static string DownloadSpeed = "0B/s";
-		static string DownloadProgress = "0.00%";
 		static void Main(string[] args)
 		{
 			Title = "NauticaSynchronizer";
@@ -137,34 +134,30 @@ namespace NauticaSynchronizer
 			int SongIndex = 1;
 			foreach (var SongData in MetaTable)
 			{
-				DownloadCount = $"{SongIndex++}/{SongCount}";
 				string SongID = SongData["id"].ToString();
-				if (MetaTemp.TryGetValue(SongData["id"].ToString(), out string value))
+				if (MetaTemp.TryGetValue(SongID, out string value))
 				{
 					string LoadLink = $"https://ksm.dev/songs/{SongID}/download";
-					LogOut($"         id: {SongData["id"]}");
+					LogOut($"         id: {SongID}");
 					LogOut($"      title: {SongData["title"]}");
 					LogOut($"     artist: {SongData["artist"]}");
 					LogOut($"uploaded_at: {SongData["uploaded_at"]}");
 					LogOut($"   Download: {LoadLink}");
 					LogOut($"    CDN_URL: {SongData["cdn_download_url"]}");
-					LogOut($"Download From: {LoadLink}");
-					CancellationTokenSource TokenSource = new CancellationTokenSource();
-					Task<bool> completedTask = await Task.WhenAny(TimeoutDetector(30, TokenSource.Token), FileDownload(LoadLink, $"{SavePath}{SongID}.zip", TokenSource.Token));
-					TokenSource.Cancel();
-					TokenSource.Dispose();
-					bool resultBool = completedTask.Result;
-					if (!resultBool)
+					Console.ForegroundColor = ConsoleColor.DarkYellow;
+					Console.WriteLine($"   Get_From: {LoadLink}");
+					Console.ForegroundColor = ConsoleColor.Gray;
+					Downloader WebLoader = new Downloader("NauticaSynchronizer", $"{SongIndex++}/{SongCount}");
+					byte[] WebFileBuffer = await WebLoader.GetWebFileBuffer(LoadLink, 10);
+					if (WebFileBuffer.Length < 1)
 					{
 						LoadLink = SongData["cdn_download_url"].ToString();
-						LogOut($"Download From: {LoadLink}");
-						CancellationTokenSource TokenSource1 = new CancellationTokenSource();
-						Task<bool> completedTask1 = await Task.WhenAny(TimeoutDetector(30, TokenSource1.Token), FileDownload(LoadLink, $"{SavePath}{SongID}.zip", TokenSource1.Token));
-						TokenSource1.Cancel();
-						TokenSource1.Dispose();
-						resultBool = completedTask1.Result;
+						Console.ForegroundColor = ConsoleColor.DarkYellow;
+						Console.WriteLine($"   Get_From: {LoadLink}");
+						Console.ForegroundColor = ConsoleColor.Gray;
+						WebFileBuffer = await WebLoader.GetWebFileBuffer(LoadLink, 10);
 					}
-					if (resultBool)
+					if (0 < WebFileBuffer.Length)
 					{
 						try
 						{
@@ -172,32 +165,22 @@ namespace NauticaSynchronizer
 							Console.ForegroundColor = ConsoleColor.DarkYellow;
 							LogOut("Extract...");
 							Console.ForegroundColor = ConsoleColor.Gray;
-							using FileStream zipFileToOpen = new FileStream($"{SavePath}{SongID}.zip", FileMode.Open);
-							using ZipArchive archive = new ZipArchive(zipFileToOpen, ZipArchiveMode.Read);
-							string ExtractDirectory = null;
-							foreach (var currEntry in archive.Entries)
+							using Stream MemStream = new MemoryStream(WebFileBuffer);
+							using ZipArchive archive = new ZipArchive(MemStream, ZipArchiveMode.Read);
+							string ExtractToPath = $"{SavePath}{SongID}";// 解压到SongID文件夹
+							Directory.CreateDirectory(ExtractToPath);
+							foreach (ZipArchiveEntry currEntry in archive.Entries)
 							{
-								if (currEntry.FullName.Contains(@"/"))
+								if(currEntry.Name.Length>0)
 								{
-									ExtractDirectory = currEntry.FullName.Split('/')[0];
-									break;
+									currEntry.ExtractToFile($"{ExtractToPath}/{currEntry.Name}", true);
 								}
 							}
-							archive.Dispose();
-							zipFileToOpen.Close();
-							// 防止文件名出现非法字符
-							char[] invalidChars = Path.GetInvalidFileNameChars();
-							string SaveDirectory = new string(SongData["title"].ToString().Where(x => !invalidChars.Contains(x)).ToArray()).Trim();
-							string ExtractPath = ExtractDirectory != null ? SavePath : $"{SavePath}{SaveDirectory}";
-							ExtractDirectory = ExtractDirectory != null ? $"{SavePath}{ExtractDirectory}" : $"{SavePath}{SaveDirectory}";
 							Console.ForegroundColor = ConsoleColor.DarkYellow;
-							LogOut($"  ExtractTo: {ExtractDirectory}");
+							LogOut($"  ExtractTo: {ExtractToPath}");
 							Console.ForegroundColor = ConsoleColor.Gray;
-							if (Directory.Exists(ExtractDirectory)) Directory.Delete(ExtractDirectory, true);
-							ZipFile.ExtractToDirectory($"{SavePath}{SongID}.zip", ExtractPath);
-							File.Delete($"{SavePath}{SongID}.zip");
 							// 保存记录
-							LocalMeta[SongID] = SongData["uploaded_at"].ToString();
+							LocalMeta[SongID] = $"{SongData["uploaded_at"]}|{SongData["title"]}|{SongData["artist"]}";
 							DictionaryToFile(MetaPath, LocalMeta);
 							// 操作成功
 							Console.ForegroundColor = ConsoleColor.Green;
@@ -207,14 +190,16 @@ namespace NauticaSynchronizer
 						catch (Exception e)
 						{
 							Console.ForegroundColor = ConsoleColor.Red;
-							LogOut($"Failed: {e.Message}");
+							Console.WriteLine($"Failed: {e.Message}");
 							Console.ForegroundColor = ConsoleColor.Gray;
+							// 解压失败时保存zip文件
+							File.WriteAllBytes($"{SavePath}/{SongID}.zip", WebFileBuffer);
 						}
 					}
 					else
 					{
 						Console.ForegroundColor = ConsoleColor.Red;
-						LogOut("Failed!");
+						Console.WriteLine("Failed!");
 						Console.ForegroundColor = ConsoleColor.Gray;
 					}
 					LogOut("");
@@ -242,152 +227,23 @@ namespace NauticaSynchronizer
 			ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;          // SecurityProtocolType.Tls1.2;
 			ServicePointManager.DefaultConnectionLimit = 20;
 			WebClient WClient = new WebClient();
-			string result;
-			try
-			{
-				result = WClient.DownloadString(FileLink);
-			}
-			catch (WebException e)
-			{
-				Console.WriteLine($"{e.Message}, Try Again...");
-				result = null;
-			}
-			if (result == null)
+			string result = null;
+			int tryCount = 2;
+			while (tryCount-- > 0)
 			{
 				try
 				{
 					result = WClient.DownloadString(FileLink);
+					break;
 				}
-				catch (WebException e)
+				catch (Exception e)
 				{
-					Console.WriteLine(e.Message);
-					result = null;
+					Console.WriteLine($"{e.Message}, Try Again...");
 				}
 			}
 			return result;
 		}
 
-		/// <summary>
-		/// 下载文件
-		/// </summary>
-		/// <param name="FileLink">目标链接</param>
-		/// <param name="FilePath">保存路径</param>
-		/// <returns>操作结果</returns>
-		static async Task<bool> FileDownload(string FileLink, string FilePath, CancellationToken CancelToken)
-		{
-			bool result;
-			ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072;          // SecurityProtocolType.Tls1.2;
-			ServicePointManager.DefaultConnectionLimit = 20;
-			Title = $"NauticaSynchronizer  -  Count:{DownloadCount} , Speed:0B/s , Progress:0.00% , Loaded:0Byte";
-
-			List<byte> buffers = new List<byte>();
-			HttpWebRequest Downloader = (HttpWebRequest)WebRequest.Create(FileLink);
-			Downloader.KeepAlive = false;
-			Downloader.Method = "GET";
-			Downloader.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.129 Safari/537.36";
-			Downloader.ServicePoint.Expect100Continue = false;
-			Downloader.Timeout = 30000;
-			Downloader.ReadWriteTimeout = 60000;
-			try
-			{
-				using HttpWebResponse response = (HttpWebResponse)Downloader.GetResponse();
-				long FileSize = response.ContentLength;
-				long SaveSize = 0;
-				long TickSize = 0;
-
-				using Stream ns = response.GetResponseStream();
-				int readSize = 0;
-				int buffSize = 1024;
-				byte[] buffer = new byte[buffSize];
-				DateTime ReferTime = DateTime.Now.AddSeconds(1);
-				do
-				{
-					readSize = await ns.ReadAsync(buffer, 0, buffSize);
-					buffers.AddRange(buffer);
-					SaveSize += readSize;
-					TickSize += readSize;
-					if (CancelToken.IsCancellationRequested)
-					{
-						Downloader.Abort();
-						buffers.Clear();
-						return false;
-					}
-
-					if (TickSize == SaveSize || DateTime.Compare(ReferTime, DateTime.Now) <= 0)
-					{
-						if (TickSize >= 1024 * 1024)
-						{
-							DownloadSpeed = $"{(double)TickSize / 1024 / 1024:0.00}M/s";
-						}
-						else if (TickSize >= 1024)
-						{
-							DownloadSpeed = $"{(double)TickSize / 1024:0.00}K/s";
-						}
-						else
-						{
-							DownloadSpeed = $"{TickSize}B/s";
-						}
-						if (DateTime.Compare(ReferTime, DateTime.Now) <= 0)
-						{
-							TickSize = 0;
-							ReferTime = ReferTime.AddSeconds(1);
-						}
-					}
-					DownloadProgress = FileSize > 0 ? $"{(double)SaveSize * 100 / FileSize:0.00}%" : $"{(double)SaveSize / 1024:0.00}KB";
-					if (FileSize > 1024 * 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize / 1024 / 1024:0.00}MB";
-					else if (FileSize > 1024) DownloadProgress = $"{DownloadProgress} , Loaded:{(double)SaveSize / 1024:0.00}KB";
-
-					Title = $"NauticaSynchronizer  -  Count:{DownloadCount} , Speed:{DownloadSpeed} , Progress:{DownloadProgress}";
-				}
-				while (readSize > 0);
-
-				File.WriteAllBytes(FilePath, buffers.ToArray());
-				ns.Close();
-				response.Close();
-				result = true;
-			}
-			catch (Exception e)
-			{
-				Console.WriteLine(e.Message);
-				result = false;
-			}
-			// Free up resources
-			if (Downloader != null) Downloader.Abort();
-			buffers.Clear();
-			return result;
-		}
-		/// <summary>
-		/// Task超时判断任务
-		/// </summary>
-		/// <param name="time">设置时间阈值(ms)</param>
-		/// <returns></returns>
-		static async Task<bool> TimeoutDetector(int time, CancellationToken CancelToken)
-		{
-			int tick = 0;
-			string refer = Title;
-			while (tick < time)
-			{
-				await Task.Delay(1000);
-				if (refer == Title)
-				{
-					++tick;
-				}
-				else
-				{
-					tick = 0;
-					refer = Title;
-				}
-				if (CancelToken.IsCancellationRequested)
-				{
-					return true;
-				}
-			}
-
-			Console.ForegroundColor = ConsoleColor.Red;
-			Console.WriteLine("Task Execution Timeout!");
-			Console.ForegroundColor = ConsoleColor.Gray;
-			return false;
-		}
 		/// <summary>
 		/// 将Json数据反序列化为Dictionary字典
 		/// </summary>

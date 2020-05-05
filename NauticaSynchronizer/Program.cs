@@ -141,7 +141,7 @@ namespace NauticaSynchronizer
 				LocalMeta = FileToDictionary(MetaPath);
 				foreach (var SongData in MetaTable)
 				{
-					string SongID = SongData["id"].ToString();
+					string SongID = $"{SongData["id"]}";
 					if (LocalMeta.TryGetValue(SongID, out string value))
 					{
 						if (value.Contains($"{SongData["uploaded_at"]}"))
@@ -173,8 +173,7 @@ namespace NauticaSynchronizer
 			{
 				++SongIndex;
 				Console.Title = $"NauticaSynchronizer  -  Count:{SongIndex}/{SongCount}";
-				string SongID = SongData["id"].ToString();
-				if (SongID.Length < 9) continue;	// 过滤id长度不符合要求的数据
+				string SongID = $"{SongData["id"]}";
 				if (!LocalMeta.ContainsKey(SongID))
 				{
 					string LoadLink = $"https://ksm.dev/songs/{SongID}/download";
@@ -223,7 +222,7 @@ namespace NauticaSynchronizer
 							Console.ForegroundColor = ConsoleColor.Gray;
 							using Stream MemStream = new MemoryStream(WebFileBuffer);
 							using ZipArchive archive = new ZipArchive(MemStream, ZipArchiveMode.Read);
-							string ExtractToPath = $"{SavePath}{ExtractMode}";// 解压到SongID文件夹
+							string ExtractToPath = $"{SavePath}{ExtractFolder}";// 解压到SongID文件夹
 							Directory.CreateDirectory(ExtractToPath);
 							foreach (ZipArchiveEntry currEntry in archive.Entries)
 							{
@@ -235,6 +234,11 @@ namespace NauticaSynchronizer
 							Console.ForegroundColor = ConsoleColor.DarkYellow;
 							LogOut($"  ExtractTo: {ExtractToPath}");
 							Console.ForegroundColor = ConsoleColor.Gray;
+						}
+						else
+						{
+							// 保存zip文件到本地
+							File.WriteAllBytes($"{SavePath}/{SongID}.zip", WebFileBuffer);
 						}
 						// 保存记录
 						LocalMeta[$"{SongID}"] = $"{SongID}|{SongData["uploaded_at"]}|{SongData["title"]}|{SongData["artist"]}";

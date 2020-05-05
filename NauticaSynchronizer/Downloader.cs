@@ -41,6 +41,7 @@ namespace NauticaSynchronizer
 			while (TimeNow < TimeOut)
 			{
 				await Task.Delay(1000);
+				if (CancelToken.IsCancellationRequested) return true;
 				TickSize = FileBuffer.Count - SaveSize;
 				Speed = TickSize > Math.Pow(2, 20) ? $"{TickSize / Math.Pow(2, 20):0.00}M/s" : $"{TickSize / Math.Pow(2, 10):0.00}K/s";
 				Console.Title = $"{Title}  -  Count:{Count} , Speed:{Speed} , Progress:{Track} , Loaded:{Cache}";
@@ -50,7 +51,6 @@ namespace NauticaSynchronizer
 					TimeNow = 0;
 					SaveSize = FileBuffer.Count;
 				}
-				if (CancelToken.IsCancellationRequested) return true;
 			}
 			Console.ForegroundColor = ConsoleColor.DarkYellow;
 			Console.WriteLine("Task execution timeout!");

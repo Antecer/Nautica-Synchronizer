@@ -14,38 +14,86 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Controls;
+using System.Windows.Documents;
 
 namespace NauticaSynchronizer
 {
 	class Program
 	{
 		private static readonly SemaphoreSlim _mutex = new SemaphoreSlim(10);
-		private static string Title { get { return Console.Title; } set { Console.Title = value; } }
-		static List<Dictionary<string, object>> MetaTable = new List<Dictionary<string, object>>();
+		private static readonly List<Dictionary<string, object>> MetaTable = new List<Dictionary<string, object>>();
+		private static int ExtractMode = 1;
 		static void Main(string[] args)
 		{
-			Title = "NauticaSynchronizer";
-			_ = AsyncMain();
-			Console.ReadKey();
+			Task.WaitAny(MainTaskAsync());
 		}
+
+		static async Task MainTaskAsync()
+		{
+			Console.Title = "NauticaSynchronizer";
+
+			Console.WriteLine("Please select a naming method for the extracted folder:");
+			Console.WriteLine(@"1. Extract to 'SongId\' (default)");
+			Console.WriteLine(@"2. Extract to 'SongTitle\'");
+			Console.WriteLine(@"3. Extract to 'SongTitle - Artist\'");
+			Console.WriteLine(@"0. Do not extract zip!");
+			DateTime WaitTime = DateTime.Now.AddSeconds(10);
+			while (!Console.KeyAvailable)
+			{
+				await Task.Delay(100);
+				Console.CursorLeft = 0;
+				Console.Write($"Selected[wait:{(WaitTime - DateTime.Now).Seconds}s]:");
+				if ((WaitTime - DateTime.Now).Seconds < 1) break;
+			}
+			ConsoleKey UserInputKey = Console.KeyAvailable ? Console.ReadKey().Key : ConsoleKey.D1;
+			ExtractMode = UserInputKey switch
+			{
+				ConsoleKey.D0 => 0,
+				ConsoleKey.D1 => 1,
+				ConsoleKey.D2 => 2,
+				ConsoleKey.D3 => 3,
+				_ => 1,
+			};
+			Console.CursorLeft = 0;
+			Console.WriteLine($"Selected: {ExtractMode}{new string(' ', 10)}\n");
+
+			while (true)
+			{
+				Task<int> MainTask = await Task.WhenAny(AsyncMain());
+				if (MainTask.Result == 0)
+				{
+					Console.Write("Press any key to exit.");
+					Console.ReadKey(true);
+					break;
+				}
+				else
+				{
+					Console.Write("Press any key to try again, or press Esc to exit?");
+					if (Console.ReadKey(true).Key == ConsoleKey.Escape) break;
+					Console.Clear();
+				}
+			}
+		}
+
 		static async Task<int> AsyncMain()
 		{
 			string AppPath = AppDomain.CurrentDomain.SetupInformation.ApplicationBase;
 			string ListLink = "https://ksm.dev/app/songs";
-			string ListPath = AppPath + "temp.json";
-			string SavePath = AppPath.EndsWith(@"songs\") ? AppPath : AppPath + @"songs\";
-			string MetaPath = SavePath + "meta.cfg";
-			if (!Directory.Exists(SavePath))
-			{
-				Directory.CreateDirectory(SavePath);
-			}
+			string SavePath = "";
+			if (AppPath.EndsWith(@"Nautica\")) SavePath = AppPath;
+			else if (AppPath.EndsWith(@"songs\")) SavePath = $@"{AppPath}Nautica\";
+			else if (Directory.Exists($"{AppPath}songs")) SavePath = $@"{AppPath}songs\Nautica\";
+			else if (File.Exists($"{AppPath}usc-game.exe")) SavePath = $@"{AppPath}songs\Nautica\";
+			else SavePath = $@"{AppPath}Nautica\";
+			string MetaPath = $@"{SavePath}meta.cfg";
+			Directory.CreateDirectory(SavePath);
 
-			LogOut("Get Nautica Meta From[https://ksm.dev] ...");
+			LogOut(@"Get Nautica Meta From <https://ksm.dev> ...");
 			string MetaData = GetHtml(ListLink);
 			if (MetaData == null)
 			{
 				LogOut($"Get NauticaMeta[{ListLink}] Failed!");
-				return 0;
+				return -1;
 			}
 			Dictionary<string, object> meta = JsonToDictionary(MetaData)["meta"] as Dictionary<string, object>;
 			int pageCount = (int)meta["last_page"];
@@ -60,7 +108,7 @@ namespace NauticaSynchronizer
 					string MetaJson = GetHtml(getlink);
 					if (string.IsNullOrWhiteSpace(MetaJson))
 					{
-						Console.ForegroundColor = ConsoleColor.Red;
+						Console.ForegroundColor = ConsoleColor.DarkRed;
 						Console.WriteLine($"Get({getlink}) Failed!");
 						Console.ForegroundColor = ConsoleColor.Gray;
 					}
@@ -75,7 +123,7 @@ namespace NauticaSynchronizer
 							}
 						}
 					}
-					Title = $"NauticaSynchronizer  -  Count:{pageIndex++}/{pageCount}";
+					Console.Title = $"NauticaSynchronizer  -  Count:{pageIndex++}/{pageCount}";
 
 					_mutex.Release();
 				})
@@ -88,41 +136,28 @@ namespace NauticaSynchronizer
 			LogOut("Analyze Nautica Meta ...");
 			int total = (int)meta["total"];
 			Dictionary<string, string> LocalMeta = new Dictionary<string, string>();
-			Dictionary<string, string> MetaTemp = new Dictionary<string, string>();
 			if (File.Exists(MetaPath))
 			{
-				MetaTemp = FileToDictionary(MetaPath);
-				LocalMeta = new Dictionary<string, string>(MetaTemp);
+				LocalMeta = FileToDictionary(MetaPath);
 				foreach (var SongData in MetaTable)
 				{
 					string SongID = SongData["id"].ToString();
-					if (MetaTemp.TryGetValue(SongID, out string value))
+					if (LocalMeta.TryGetValue(SongID, out string value))
 					{
-						if (SongData["uploaded_at"].ToString() == value)
+						if (value.Contains($"{SongData["uploaded_at"]}"))
 						{
-							MetaTemp.Remove(SongID);
+							LocalMeta[SongID] = $"{SongID}|{SongData["uploaded_at"]}|{SongData["title"]}|{SongData["artist"]}";
 						}
 						else
 						{
 							LocalMeta.Remove(SongID);
 						}
 					}
-					else
-					{
-						MetaTemp[SongID] = SongData["uploaded_at"].ToString();
-					}
 				}
-				if (MetaTemp.Count == 0)
+				if (LocalMeta.Count == MetaTable.Count)
 				{
-					LogOut("The music library is already in the latest version!");
+					LogOut("Nautica music library is already in the latest version!");
 					return 0;
-				}
-			}
-			else
-			{
-				foreach (var SongData in MetaTable)
-				{
-					MetaTemp[SongData["id"].ToString()] = SongData["uploaded_at"].ToString();
 				}
 			}
 			Console.ForegroundColor = ConsoleColor.Green;
@@ -131,11 +166,16 @@ namespace NauticaSynchronizer
 
 			LogOut("Update Music Library ...");
 			int SongCount = MetaTable.Count;
-			int SongIndex = 1;
+			int SongIndex = 0;
+			int GoodCount = 0;
+			int FailCount = 0;
 			foreach (var SongData in MetaTable)
 			{
+				++SongIndex;
+				Console.Title = $"NauticaSynchronizer  -  Count:{SongIndex}/{SongCount}";
 				string SongID = SongData["id"].ToString();
-				if (MetaTemp.TryGetValue(SongID, out string value))
+				if (SongID.Length < 9) continue;	// 过滤id长度不符合要求的数据
+				if (!LocalMeta.ContainsKey(SongID))
 				{
 					string LoadLink = $"https://ksm.dev/songs/{SongID}/download";
 					LogOut($"         id: {SongID}");
@@ -147,7 +187,7 @@ namespace NauticaSynchronizer
 					Console.ForegroundColor = ConsoleColor.DarkYellow;
 					Console.WriteLine($"   Get_From: {LoadLink}");
 					Console.ForegroundColor = ConsoleColor.Gray;
-					Downloader WebLoader = new Downloader("NauticaSynchronizer", $"{SongIndex++}/{SongCount}");
+					Downloader WebLoader = new Downloader("NauticaSynchronizer", $"{SongIndex}/{SongCount}");
 					byte[] WebFileBuffer = await WebLoader.GetWebFileBuffer(LoadLink, 10);
 					if (WebFileBuffer.Length < 1)
 					{
@@ -157,21 +197,37 @@ namespace NauticaSynchronizer
 						Console.ForegroundColor = ConsoleColor.Gray;
 						WebFileBuffer = await WebLoader.GetWebFileBuffer(LoadLink, 10);
 					}
-					if (0 < WebFileBuffer.Length)
+					if (WebFileBuffer.Length < 1)
 					{
-						try
+						Console.ForegroundColor = ConsoleColor.DarkRed;
+						Console.WriteLine("Failed!\n");
+						Console.ForegroundColor = ConsoleColor.Gray;
+						++FailCount;
+						continue;
+					}
+					try
+					{
+						if (0 < ExtractMode)
 						{
+							// 设置释放目标文件夹命名方式
+							string ExtractFolder = ExtractMode switch
+							{
+								1 => $"{SongData["id"]}",
+								2 => $"{SongData["title"]}",
+								3 => $"{SongData["title"]} - {SongData["artist"]}",
+								_ => $"{SongData["id"]}"
+							};
 							// 解压文件
 							Console.ForegroundColor = ConsoleColor.DarkYellow;
 							LogOut("Extract...");
 							Console.ForegroundColor = ConsoleColor.Gray;
 							using Stream MemStream = new MemoryStream(WebFileBuffer);
 							using ZipArchive archive = new ZipArchive(MemStream, ZipArchiveMode.Read);
-							string ExtractToPath = $"{SavePath}{SongID}";// 解压到SongID文件夹
+							string ExtractToPath = $"{SavePath}{ExtractMode}";// 解压到SongID文件夹
 							Directory.CreateDirectory(ExtractToPath);
 							foreach (ZipArchiveEntry currEntry in archive.Entries)
 							{
-								if(currEntry.Name.Length>0)
+								if (currEntry.Name.Trim().Length > 0)
 								{
 									currEntry.ExtractToFile($"{ExtractToPath}/{currEntry.Name}", true);
 								}
@@ -179,33 +235,35 @@ namespace NauticaSynchronizer
 							Console.ForegroundColor = ConsoleColor.DarkYellow;
 							LogOut($"  ExtractTo: {ExtractToPath}");
 							Console.ForegroundColor = ConsoleColor.Gray;
-							// 保存记录
-							LocalMeta[SongID] = $"{SongData["uploaded_at"]}|{SongData["title"]}|{SongData["artist"]}";
-							DictionaryToFile(MetaPath, LocalMeta);
-							// 操作成功
-							Console.ForegroundColor = ConsoleColor.Green;
-							LogOut("Success!");
-							Console.ForegroundColor = ConsoleColor.Gray;
 						}
-						catch (Exception e)
-						{
-							Console.ForegroundColor = ConsoleColor.Red;
-							Console.WriteLine($"Failed: {e.Message}");
-							Console.ForegroundColor = ConsoleColor.Gray;
-							// 解压失败时保存zip文件
-							File.WriteAllBytes($"{SavePath}/{SongID}.zip", WebFileBuffer);
-						}
-					}
-					else
-					{
-						Console.ForegroundColor = ConsoleColor.Red;
-						Console.WriteLine("Failed!");
+						// 保存记录
+						LocalMeta[$"{SongID}"] = $"{SongID}|{SongData["uploaded_at"]}|{SongData["title"]}|{SongData["artist"]}";
+						DictionaryToFile(MetaPath, LocalMeta);
+						// 操作成功
+						Console.ForegroundColor = ConsoleColor.Green;
+						LogOut("Success!\n");
 						Console.ForegroundColor = ConsoleColor.Gray;
+						++GoodCount;
 					}
-					LogOut("");
+					catch (Exception e)
+					{
+						Console.ForegroundColor = ConsoleColor.DarkRed;
+						Console.WriteLine($"Failed: {e.Message}\n");
+						Console.ForegroundColor = ConsoleColor.Gray;
+						++FailCount;
+						// 解压失败时保存zip文件
+						File.WriteAllBytes($"{SavePath}/{SongID}.zip", WebFileBuffer);
+					}
 				}
 			}
-			return 0;
+
+			Console.Title = $"NauticaSynchronizer  -  Count:{SongIndex}/{SongCount}";
+			DictionaryToFile(MetaPath, LocalMeta);
+			Console.ForegroundColor = ConsoleColor.Cyan;
+			LogOut($"Nautica music library update completed: Total={SongCount},Good={GoodCount},Pass={SongCount - GoodCount - FailCount},Fail={FailCount}");
+			Console.ForegroundColor = ConsoleColor.Gray;
+
+			return FailCount == 0 ? 0 : 1;
 		}
 
 		/// <summary>
@@ -275,9 +333,8 @@ namespace NauticaSynchronizer
 				List<string> lines = new List<string>(File.ReadAllLines(FilePath));
 				foreach (string line in lines)
 				{
-					if (string.IsNullOrWhiteSpace(line)) break;
-					string[] kv = line.Split('|');
-					result[kv[0]] = kv[1];
+					if (string.IsNullOrWhiteSpace(line)) continue;
+					else result[line.Split('|')[0]] = line;
 				}
 			}
 			catch (Exception e)
@@ -294,11 +351,7 @@ namespace NauticaSynchronizer
 		/// <returns>操作结果</returns>
 		static bool DictionaryToFile(string FilePath, Dictionary<string, string> dic)
 		{
-			List<string> lines = new List<string>();
-			foreach (string k in dic.Keys)
-			{
-				lines.Add($"{k}|{dic[k]}");
-			}
+			List<string> lines = new List<string>(dic.Values);
 			try
 			{
 				File.WriteAllLines(FilePath, lines);
